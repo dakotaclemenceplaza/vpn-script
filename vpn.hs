@@ -14,8 +14,7 @@ import Control.Exception (IOException, catch)
 import Control.Monad (void)
 import Data.List (elemIndex)
 import Network.HTTP.Simple (httpJSON, getResponseBody)
-import Data.Aeson (Value(Object, String))
-import qualified Data.HashMap.Strict as HM (lookup)
+import Data.Aeson
 import qualified Data.Text as T (Text)
 import DBus.Notify 
 
@@ -91,16 +90,20 @@ nextInList c = case fmap (\i -> vpns !! if i + 1 == length vpns then 0 else i + 
   Just country -> country
   Nothing -> error "Error: something unexpected in finding next vpn in the list"
 
-getLocation :: IO T.Text
+
+newtype Country = Country T.Text
+
+instance FromJSON Country where
+  parseJSON = withObject "Country" $ \o -> Country <$> o .: "country"
+  
+getLocation :: IO Country
 getLocation = do
   response <- httpJSON "http://ifconfig.co/json"
-  case getResponseBody response of
-    Object o -> case HM.lookup "country" o of
-      Just (String country) -> return country
-      _ -> error "Error: something unexpected in the response from getting location"
+  case fromJSON $ getResponseBody response of
+    Success c -> return c
     _ -> error "Error: something unexpected in the response from getting location"
 
-notifyConnected country = do
+notifyConnected (Country country) = do
   client <- connectSession
   let countryString = init . tail . show $ country
       message = "Location: " ++ countryString
