@@ -28,7 +28,7 @@ main = do
   result <- runExceptT $ run args
   case result of
     Right vpn -> case vpn of
-      On country -> putStrLn $ "Vpn is started. Location: " ++ country
+      On country -> putStrLn $ "Vpn is started. Location: " <> country
       Off -> putStrLn "Vpn is stopped"
     Left e -> putStrLn e
 
@@ -43,12 +43,12 @@ run [country] = if country `elem` vpns
 start country = do
   current <- currentVpn
   case current of
-    On c -> throwError $ "Vpn is already running: " ++ c
+    On c -> throwError $ "Vpn is already running: " <> c
     Off -> do
       stat <- status (On country)
       case stat of
         Off -> lift $ do
-          void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " start"
+          void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." <> country <> " start"
           getLocation >>= notifyConnected -- needs some time before asking location
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" country
@@ -66,7 +66,7 @@ stop = do
   current <- currentVpn
   case current of
     On country -> lift $ do
-      runProcess_ $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " stop" 
+      runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> country <> " stop" 
       removeFile "/tmp/vpn/current" -- add checking status of just stopped?
       return (On country)
     Off -> throwError "Vpn is not running"
@@ -82,7 +82,7 @@ currentVpn = let exceptionHandler :: IOException -> IO Vpn
 
 status :: Vpn -> VpnToggle
 status (On country) = do
-  (_, out, _) <- lift $ readProcess $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " status"
+  (_, out, _) <- lift $ readProcess $ shell $ "sudo /etc/init.d/openvpn." <> country <> " status"
   case out of
     " * status: stopped\n" -> return Off
     " * status: started\n" -> return $ On country
@@ -112,6 +112,6 @@ getLocation = do
 notifyConnected (Country country) = do
   client <- connectSession
   let countryString = init . tail . show $ country
-      message = "Location: " ++ countryString
+      message = "Location: " <> countryString
   void $ notify client $ blankNote {summary = "VPN",
                                     body = Just $ Text message}
