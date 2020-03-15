@@ -32,6 +32,7 @@ main = do
       Off -> putStrLn "Vpn is stopped"
     Left e -> putStrLn e
 
+run :: [String] -> VpnToggle
 run [] = start defaultVpn
 run ["test"] = lift $ getLocation >>= \(Country c) -> notifyConnected (Country c) >> return (On (show c))
 run ["next"] = next
@@ -39,7 +40,9 @@ run ["stop"] = stop
 run [country] = if country `elem` vpns
                  then start country
                  else throwError "No such vpn"
+run _ = throwError "Too many arguments"
 
+start :: String -> VpnToggle  
 start country = do
   current <- currentVpn
   case current of
@@ -55,6 +58,7 @@ start country = do
           return (On country)
         On _ -> throwError "Error: running vpn is not in tmp file"
 
+next :: VpnToggle
 next = do
   current <- currentVpn
   case current of
@@ -62,6 +66,7 @@ next = do
                start $ nextInList c
     Off -> throwError "Vpn is not running"
 
+stop :: VpnToggle
 stop = do
   current <- currentVpn
   case current of
@@ -89,9 +94,12 @@ status (On country) = do
     _ -> throwError "Error: something unexpected in status checking"
 status Off = return Off
 
+vpns :: [String]
 vpns = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
+defaultVpn :: String
 defaultVpn = "nl1"
 
+nextInList :: String -> String
 nextInList c = case fmap (\i -> vpns !! if i + 1 == length vpns then 0 else i + 1) (c `elemIndex` vpns) of
   Just country -> country
   Nothing -> error "Error: something unexpected in finding next vpn in the list"
@@ -109,6 +117,7 @@ getLocation = do
     Success c -> return c
     _ -> error "Error: something unexpected in the response from getting location"
 
+notifyConnected :: Country -> IO ()
 notifyConnected (Country country) = do
   client <- connectSession
   let countryString = init . tail . show $ country
