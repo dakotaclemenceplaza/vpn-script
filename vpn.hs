@@ -2,7 +2,7 @@
 {- stack
   script
   --resolver lts-15.2
-  --package "directory typed-process fdo-notify http-conduit aeson unordered-containers text"
+  --package "directory typed-process fdo-notify http-conduit aeson unordered-containers text mtl"
 -}
 
 {-# LANGUAGE OverloadedStrings #-}
@@ -11,78 +11,84 @@ import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing, removeFile)
 import System.Process.Typed (runProcess, runProcess_, readProcess, shell)
 import Control.Exception (IOException, catch)
-import Control.Monad (void)
 import Data.List (elemIndex)
+import Control.Monad (void)
 import Network.HTTP.Simple (httpJSON, getResponseBody)
 import Data.Aeson
 import qualified Data.Text as T (Text)
 import DBus.Notify 
+import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
+
+data Vpn = Off | On String
+type VpnToggle = ExceptT String IO Vpn
 
 main :: IO ()
 main = do
   args <- getArgs
-  case args of
-    [] -> start defaultVpn
-    ["test"] -> getLocation >>= notifyConnected
-    ["next"] -> next
-    ["stop"] -> stop
-    [country] -> if country `elem` vpns
+  result <- runExceptT $ run args
+  case result of
+    Right vpn -> case vpn of
+      On country -> putStrLn $ "Vpn is started. Location: " ++ country
+      Off -> putStrLn "Vpn is stopped"
+    Left e -> putStrLn e
+
+run [] = start defaultVpn
+run ["test"] = lift $ getLocation >>= \(Country c) -> notifyConnected (Country c) >> return (On (show c))
+run ["next"] = next
+run ["stop"] = stop
+run [country] = if country `elem` vpns
                  then start country
-                 else putStrLn "No such vpn"
-    _ -> putStrLn "Too many arguments"
+                 else throwError "No such vpn"
 
 start country = do
   current <- currentVpn
   case current of
-    Just c -> putStrLn $ "Vpn is already running: " ++ c
-    Nothing -> do
-      stat <- status country
+    On c -> throwError $ "Vpn is already running: " ++ c
+    Off -> do
+      stat <- status (On country)
       case stat of
-        Stopped -> do
+        Off -> lift $ do
           void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " start"
           getLocation >>= notifyConnected -- needs some time before asking location
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" country
-        Started -> error "Error: running vpn is not in tmp file"
+          return (On country)
+        On _ -> throwError "Error: running vpn is not in tmp file"
 
 next = do
   current <- currentVpn
   case current of
-    Just c -> do stop
-                 start $ nextInList c
-    Nothing -> putStrLn "Vpn is not running"
+    On c -> do void stop
+               start $ nextInList c
+    Off -> throwError "Vpn is not running"
 
 stop = do
   current <- currentVpn
   case current of
-    Just country -> do
+    On country -> lift $ do
       runProcess_ $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " stop" 
       removeFile "/tmp/vpn/current" -- add checking status of just stopped?
-    Nothing -> putStrLn "Vpn is not running"
+      return (On country)
+    Off -> throwError "Vpn is not running"
 
-currentVpn :: IO (Maybe String)
-currentVpn = let exceptionHandler :: IOException -> IO (Maybe String)
-                 exceptionHandler _ = return Nothing
+currentVpn :: VpnToggle
+currentVpn = let exceptionHandler :: IOException -> IO Vpn
+                 exceptionHandler _ = return Off
              in do
-  current <- fmap Just (readFile "/tmp/vpn/current") `catch` exceptionHandler
+  current <- lift (fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler) >>= status
   case current of
-    Just country -> do
-      stat <- status country
-      case stat of
-        Started -> return $ Just country
-        Stopped -> error "Error: current vpn in tmp file is not running"
-    Nothing -> return Nothing
-  
-data Status = Stopped | Started
+    On country -> return $ On country
+    Off -> throwError "Error: current vpn in tmp file is not running"
 
-status :: String -> IO Status
-status country = do
-  (_, out, _) <- readProcess $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " status"
+status :: Vpn -> VpnToggle
+status (On country) = do
+  (_, out, _) <- lift $ readProcess $ shell $ "sudo /etc/init.d/openvpn." ++ country ++ " status"
   case out of
-    " * status: stopped\n" -> return Stopped
-    " * status: started\n" -> return Started
-    _ -> error "Error: something unexpected in status checking"
-    
+    " * status: stopped\n" -> return Off
+    " * status: started\n" -> return $ On country
+    _ -> throwError "Error: something unexpected in status checking"
+status Off = return Off
+
 vpns = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
 defaultVpn = "nl1"
 
