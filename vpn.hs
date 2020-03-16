@@ -28,7 +28,7 @@ main = do
   result <- runExceptT $ run args
   case result of
     Right vpn -> case vpn of
-      On server -> putStrLn $ "Vpn is started. Location: " <> server
+      On server -> putStrLn $ "Vpn is started. Location: " <> server -- it says started when I stop vpn because it returns current vpn, change to Off
       Off -> putStrLn "Vpn is stopped"
     Left e -> putStrLn e
 
