@@ -18,6 +18,7 @@ import Data.Aeson
 import qualified Data.Text as T (Text)
 import DBus.Notify 
 import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
+import Control.Concurrent (threadDelay)
 
 data Vpn = Off | On String
 type VpnToggle = ExceptT String IO Vpn
@@ -28,7 +29,7 @@ main = do
   result <- runExceptT $ run args
   case result of
     Right vpn -> case vpn of
-      On server -> putStrLn $ "Vpn is started. Location: " <> server -- it says started when I stop vpn because it returns current vpn, change to Off
+      On server -> putStrLn $ "Vpn is started. Location: " <> server
       Off -> putStrLn "Vpn is stopped"
     Left e -> putStrLn e
 
@@ -50,11 +51,12 @@ start server = do
   case current of
     On c -> throwError $ "Vpn is already running: " <> c
     Off -> do
-      stat <- status (On server)
+      stat <- status server
       case stat of
         Off -> lift $ do
           void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
-          getLocation >>= notifyConnected -- needs some time before asking location
+          threadDelay 1000000 -- needs some time before asking location
+          getLocation >>= notifyConnected
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" server
           return (On server)
@@ -75,26 +77,29 @@ stop = do
     On server -> lift $ do
       runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> server <> " stop" 
       removeFile "/tmp/vpn/current" -- add checking status of just stopped?
-      return (On server)
+      return Off
     Off -> throwError "Vpn is not running"
 
 currentVpn :: VpnToggle
-currentVpn = let exceptionHandler :: IOException -> IO Vpn
-                 exceptionHandler _ = return Off
-             in do
-  current <- lift (fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler) >>= status
-  case current of
-    On server -> return $ On server
-    Off -> throwError "Error: current vpn in tmp file is not running"
+currentVpn = do
+  vpnInTmp <- lift $ fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler
+  case vpnInTmp of
+    On server -> do
+      vpnStatus <- status server
+      case vpnStatus of
+        Off -> throwError "Error: current vpn in tmp file is not running"
+        on -> return on
+    Off -> return Off
+  where exceptionHandler :: IOException -> IO Vpn
+        exceptionHandler _ = return Off
 
-status :: Vpn -> VpnToggle
-status (On server) = do
+status :: String -> VpnToggle
+status server = do
   (_, out, _) <- lift $ readProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " status"
   case out of
     " * status: stopped\n" -> return Off
     " * status: started\n" -> return $ On server
     _ -> throwError "Error: something unexpected in status checking"
-status Off = return Off
 
 servers :: [String]
 servers = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
