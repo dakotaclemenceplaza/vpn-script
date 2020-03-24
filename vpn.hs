@@ -22,44 +22,34 @@ import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
 import Control.Lens ((^?))
 import Data.Aeson.Lens (key, _String)
 
+servers :: [String]
+servers = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
+defaultServer :: String
+defaultServer = "nl1"
+
 data Vpn = Off | On String
-type VpnToggle = ExceptT String IO Vpn
+type VpnToggle a = ExceptT String IO a
 
 data Notify = CLI | Desktop
 
 main :: IO ()
 main = do
   args <- getArgs
-  case args of
-    ["desk"] -> runExceptT (run []) >>= outputResult Desktop
-    [arg, "desk"] -> runExceptT (run [arg]) >>= outputResult Desktop
-    other -> runExceptT (run other) >>= outputResult CLI
+  end <- case args of
+           ["desk"] -> runExceptT $ run [] >>= outputResult Desktop
+           [arg, "desk"] -> runExceptT $ run [arg] >>= outputResult Desktop
+           other -> runExceptT $ run other >>= outputResult CLI
+  case end of
+    Right _ -> pure ()
+    Left e -> putStrLn e -- errors go to stdout only
+    
+outputResult :: Notify -> Vpn -> VpnToggle ()
+outputResult CLI (On server) = getLocation >>= lift . putStrLn . locationString server . show
+outputResult CLI Off = lift $ putStrLn "Vpn is stopped" -- maybe get location too?
+outputResult Desktop (On server) = getLocation >>= lift . notifyDesktop . locationString server . show
+outputResult Desktop Off = lift $ notifyDesktop "Vpn is stopped"
 
-outputResult :: Notify -> Either String Vpn -> IO ()
-outputResult CLI (Right (On server)) = getLocation >>= putStrLn . locationString server . show
-outputResult CLI (Right Off) = putStrLn "Vpn is stopped" -- maybe get location too?
-outputResult CLI (Left e) = putStrLn e
-outputResult Desktop (Right (On server)) = getLocation >>= notifyDesktop . locationString server . show
-outputResult Desktop (Right Off) = notifyDesktop "Vpn is stopped"
-outputResult Desktop (Left e) = notifyDesktop e
-
-locationString :: String -> String -> String
-locationString server location = "Vpn is started. Server: " <> server <> ". Location: " <> init (tail location)
-
-getLocation :: IO T.Text
-getLocation = do
-  response <- getResponseBody <$> httpJSON "http://ifconfig.co/json" :: IO Value
-  case response ^? key "country" . _String of
-    Just c -> return c
-    _ -> error "Error: something unexpected in the response from getting location"
-
-notifyDesktop :: String -> IO ()
-notifyDesktop message = do
-  client <- connectSession
-  void $ notify client $ blankNote {summary = "VPN",
-                                    body = Just $ Text message}
-
-run :: [String] -> VpnToggle
+run :: [String] -> VpnToggle Vpn
 run [] = start defaultServer
 run ["location"] = currentVpn
 run ["next"] = next
@@ -67,9 +57,9 @@ run ["stop"] = stop
 run [server] = if server `elem` servers
                  then start server
                  else throwError "No such vpn server"
-run _ = throwError "Too many arguments"
+run _ = throwError "Bad arguments"
 
-start :: String -> VpnToggle  
+start :: String -> VpnToggle Vpn
 start server = do
   current <- currentVpn
   case current of
@@ -81,29 +71,28 @@ start server = do
           void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" server
-          return (On server)
+          pure (On server)
         On _ -> throwError "Error: running vpn is not in tmp file"
 
-next :: VpnToggle
+next :: VpnToggle Vpn
 next = do
-  current <- currentVpn
+  current <- currentVpn -- don't need this, stop will handle it?
   case current of
     On c -> do void stop
-               On server <- nextInList c -- ugly
-               start server
+               nextInList c >>= start
     Off -> throwError "Vpn is not running"
 
-stop :: VpnToggle
+stop :: VpnToggle Vpn
 stop = do
   current <- currentVpn
   case current of
     On server -> lift $ do
       runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> server <> " stop" 
       removeFile "/tmp/vpn/current" -- add checking status of just stopped?
-      return Off
+      pure Off
     Off -> throwError "Vpn is not running"
 
-currentVpn :: VpnToggle
+currentVpn :: VpnToggle Vpn
 currentVpn = do
   vpnInTmp <- lift $ fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler
   case vpnInTmp of
@@ -111,25 +100,36 @@ currentVpn = do
       vpnStatus <- status server
       case vpnStatus of
         Off -> throwError "Error: current vpn in tmp file is not running"
-        on -> return on
-    Off -> return Off
+        on -> pure on
+    Off -> pure Off
   where exceptionHandler :: IOException -> IO Vpn
-        exceptionHandler _ = return Off
+        exceptionHandler _ = pure Off
 
-status :: String -> VpnToggle
+status :: String -> VpnToggle Vpn
 status server = do
   (_, out, _) <- lift $ readProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " status"
   case out of
-    " * status: stopped\n" -> return Off
-    " * status: started\n" -> return $ On server
+    " * status: stopped\n" -> pure Off
+    " * status: started\n" -> pure $ On server
     _ -> throwError "Error: something unexpected in status checking"
 
-servers :: [String]
-servers = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
-defaultServer :: String
-defaultServer = "nl1"
+getLocation :: VpnToggle T.Text
+getLocation = do
+  response <- lift $ getResponseBody <$> httpJSON "http://ifconfig.co/json" :: VpnToggle Value
+  case response ^? key "country" . _String of
+    Just c -> pure c
+    _ -> throwError "Error: something unexpected in the response from getting location"
 
-nextInList :: String -> VpnToggle
+notifyDesktop :: String -> IO ()
+notifyDesktop message = do
+  client <- connectSession
+  void $ notify client $ blankNote {summary = "VPN",
+                                    body = Just $ Text message}
+
+nextInList :: String -> VpnToggle String
 nextInList c = case fmap (\i -> servers !! if i + 1 == length servers then 0 else i + 1) (c `elemIndex` servers) of
-  Just server -> return (On server) -- ugly
+  Just server -> pure server
   Nothing -> throwError "Error: something unexpected in finding next vpn in the list"
+
+locationString :: String -> String -> String
+locationString server location = "Vpn is started. Server: " <> server <> ". Location: " <> init (tail location)
