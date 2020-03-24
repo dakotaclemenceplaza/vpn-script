@@ -18,29 +18,50 @@ import Data.Aeson
 import qualified Data.Text as T (Text)
 import DBus.Notify 
 import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
-import Control.Concurrent (threadDelay)
+--import Control.Concurrent (threadDelay)
 import Control.Lens ((^?))
 import Data.Aeson.Lens (key, _String)
 
 data Vpn = Off | On String
 type VpnToggle = ExceptT String IO Vpn
 
+data Notify = CLI | Desktop
+
 main :: IO ()
 main = do
   args <- getArgs
-  result <- runExceptT $ run args
-  case result of
-    Right vpn -> case vpn of
-      On server -> putStrLn $ "Vpn is started. Location: " <> server
-      Off -> putStrLn "Vpn is stopped"
-    Left e -> putStrLn e
+  case args of
+    ["desk"] -> runExceptT (run []) >>= outputResult Desktop
+    [arg, "desk"] -> runExceptT (run [arg]) >>= outputResult Desktop
+    other -> runExceptT (run other) >>= outputResult CLI
+
+outputResult :: Notify -> Either String Vpn -> IO ()
+outputResult CLI (Right (On server)) = getLocation >>= putStrLn . locationString server . show
+outputResult CLI (Right Off) = putStrLn "Vpn is stopped" -- maybe get location too?
+outputResult CLI (Left e) = putStrLn e
+outputResult Desktop (Right (On server)) = getLocation >>= notifyDesktop . locationString server . show
+outputResult Desktop (Right Off) = notifyDesktop "Vpn is stopped"
+outputResult Desktop (Left e) = notifyDesktop e
+
+locationString :: String -> String -> String
+locationString server location = "Vpn is started. Server: " <> server <> ". Location: " <> init (tail location)
+
+getLocation :: IO T.Text
+getLocation = do
+  response <- getResponseBody <$> httpJSON "http://ifconfig.co/json" :: IO Value
+  case response ^? key "country" . _String of
+    Just c -> return c
+    _ -> error "Error: something unexpected in the response from getting location"
+
+notifyDesktop :: String -> IO ()
+notifyDesktop message = do
+  client <- connectSession
+  void $ notify client $ blankNote {summary = "VPN",
+                                    body = Just $ Text message}
 
 run :: [String] -> VpnToggle
 run [] = start defaultServer
-run ["location"] = do
-  vpn <- currentVpn
-  lift $ getLocation >>= notifyConnected
-  return vpn
+run ["location"] = currentVpn
 run ["next"] = next
 run ["stop"] = stop
 run [server] = if server `elem` servers
@@ -58,8 +79,6 @@ start server = do
       case stat of
         Off -> lift $ do
           void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
-          threadDelay 1000000 -- needs some time before asking location
-          getLocation >>= notifyConnected
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" server
           return (On server)
@@ -70,7 +89,8 @@ next = do
   current <- currentVpn
   case current of
     On c -> do void stop
-               start $ nextInList c
+               On server <- nextInList c -- ugly
+               start server
     Off -> throwError "Vpn is not running"
 
 stop :: VpnToggle
@@ -109,22 +129,7 @@ servers = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
 defaultServer :: String
 defaultServer = "nl1"
 
-nextInList :: String -> String
+nextInList :: String -> VpnToggle
 nextInList c = case fmap (\i -> servers !! if i + 1 == length servers then 0 else i + 1) (c `elemIndex` servers) of
-  Just server -> server
-  Nothing -> error "Error: something unexpected in finding next vpn in the list"
-
-getLocation :: IO T.Text
-getLocation = do
-  response <- fmap getResponseBody $ httpJSON "http://ifconfig.co/json" :: IO Value
-  case response ^? key "country" . _String of
-    Just c -> return c
-    _ -> error "Error: something unexpected in the response from getting location"
-
-notifyConnected :: T.Text -> IO ()
-notifyConnected country = do
-  client <- connectSession
-  let countryString = init . tail . show $ country
-      message = "Location: " <> countryString
-  void $ notify client $ blankNote {summary = "VPN",
-                                    body = Just $ Text message}
+  Just server -> return (On server) -- ugly
+  Nothing -> throwError "Error: something unexpected in finding next vpn in the list"
