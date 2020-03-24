@@ -2,7 +2,7 @@
 {- stack
   script
   --resolver lts-15.2
-  --package "directory typed-process fdo-notify http-conduit aeson unordered-containers text mtl"
+  --package "directory typed-process fdo-notify http-conduit aeson unordered-containers text mtl lens lens-aeson"
 -}
 
 {-# LANGUAGE OverloadedStrings #-}
@@ -19,6 +19,8 @@ import qualified Data.Text as T (Text)
 import DBus.Notify 
 import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
 import Control.Concurrent (threadDelay)
+import Control.Lens ((^?))
+import Data.Aeson.Lens (key, _String)
 
 data Vpn = Off | On String
 type VpnToggle = ExceptT String IO Vpn
@@ -35,9 +37,10 @@ main = do
 
 run :: [String] -> VpnToggle
 run [] = start defaultServer
--- maybe getting location shouldn't be in the main monad? It shouldn't always return a vpn
--- or it needs to check if vpn is running before returning On or Off
-run ["location"] = lift $ getLocation >>= \(Country c) -> notifyConnected (Country c) >> return (On (show c))
+run ["location"] = do
+  vpn <- currentVpn
+  lift $ getLocation >>= notifyConnected
+  return vpn
 run ["next"] = next
 run ["stop"] = stop
 run [server] = if server `elem` servers
@@ -111,21 +114,15 @@ nextInList c = case fmap (\i -> servers !! if i + 1 == length servers then 0 els
   Just server -> server
   Nothing -> error "Error: something unexpected in finding next vpn in the list"
 
-
-newtype Country = Country T.Text
-
-instance FromJSON Country where
-  parseJSON = withObject "Country" $ \o -> Country <$> o .: "country"
-  
-getLocation :: IO Country
+getLocation :: IO T.Text
 getLocation = do
-  response <- httpJSON "http://ifconfig.co/json"
-  case fromJSON $ getResponseBody response of
-    Success c -> return c
+  response <- fmap getResponseBody $ httpJSON "http://ifconfig.co/json" :: IO Value
+  case response ^? key "country" . _String of
+    Just c -> return c
     _ -> error "Error: something unexpected in the response from getting location"
 
-notifyConnected :: Country -> IO ()
-notifyConnected (Country country) = do
+notifyConnected :: T.Text -> IO ()
+notifyConnected country = do
   client <- connectSession
   let countryString = init . tail . show $ country
       message = "Location: " <> countryString
