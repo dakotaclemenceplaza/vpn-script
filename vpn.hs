@@ -36,28 +36,28 @@ main :: IO ()
 main = do
   args <- getArgs
   end <- case args of
-           ["desk"] -> runExceptT $ run [] >>= outputResult Desktop
-           [arg, "desk"] -> runExceptT $ run [arg] >>= outputResult Desktop
-           other -> runExceptT $ run other >>= outputResult CLI
+           ["desk"] -> runExceptT $ run [] Desktop
+           [arg, "desk"] -> runExceptT $ run [arg] Desktop
+           other -> runExceptT $ run other CLI
   case end of
     Right _ -> pure ()
     Left e -> putStrLn e -- errors go to stdout only
     
+run :: [String] -> Notify -> VpnToggle ()
+run [] notifyMode = start defaultServer >>= outputResult notifyMode
+run ["location"] notifyMode = currentVpn >>= outputResult notifyMode 
+run ["next"] notifyMode = next >>= outputResult notifyMode
+run ["stop"] notifyMode = stop >>= outputResult notifyMode
+run [server] notifyMode = if server `elem` servers
+                          then start server >>= outputResult notifyMode
+                          else throwError "No such vpn server"
+run _ _ = throwError "Bad arguments"
+
 outputResult :: Notify -> Vpn -> VpnToggle ()
 outputResult CLI (On server) = getLocation >>= lift . putStrLn . locationString server . show
 outputResult CLI Off = lift $ putStrLn "Vpn is stopped" -- maybe get location too?
 outputResult Desktop (On server) = getLocation >>= lift . notifyDesktop . locationString server . show
 outputResult Desktop Off = lift $ notifyDesktop "Vpn is stopped"
-
-run :: [String] -> VpnToggle Vpn
-run [] = start defaultServer
-run ["location"] = currentVpn
-run ["next"] = next
-run ["stop"] = stop
-run [server] = if server `elem` servers
-                 then start server
-                 else throwError "No such vpn server"
-run _ = throwError "Bad arguments"
 
 -- currentVpn is used in next functions and performs file read and status checking multiple times
 start :: String -> VpnToggle Vpn
