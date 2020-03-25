@@ -9,7 +9,7 @@
 
 import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing, removeFile)
-import System.Process.Typed (runProcess, runProcess_, readProcess, shell)
+import System.Process.Typed (runProcess_, readProcess, shell)
 import Control.Exception (IOException, catch)
 import Data.List (elemIndex)
 import Control.Monad (void)
@@ -36,27 +36,33 @@ main :: IO ()
 main = do
   args <- getArgs
   end <- case args of
-           ["desk"] -> runExceptT $ run [] Desktop
-           [arg, "desk"] -> runExceptT $ run [arg] Desktop
-           other -> runExceptT $ run other CLI
+           ["desk"] -> runExceptT $ run Desktop []
+           [arg, "desk"] -> runExceptT $ run Desktop [arg]
+           other -> runExceptT $ run CLI other
   case end of
     Right _ -> pure ()
     Left e -> putStrLn e -- errors go to stdout only
     
-run :: [String] -> Notify -> VpnToggle ()
-run [] notifyMode = start defaultServer >>= outputResult notifyMode
-run ["location"] notifyMode = currentVpn >>= outputResult notifyMode 
-run ["next"] notifyMode = next >>= outputResult notifyMode
-run ["stop"] notifyMode = stop >>= outputResult notifyMode
-run [server] notifyMode = if server `elem` servers
-                          then start server >>= outputResult notifyMode
-                          else throwError "No such vpn server"
-run _ _ = throwError "Bad arguments"
+run :: Notify -> [String] -> VpnToggle ()
+run notifyMode arg = let outRes = outputResult notifyMode
+                     in case arg of
+                          [] -> start defaultServer >>= outRes
+                          ["location"] -> currentVpn >>= outRes
+                          ["next"] -> next >>= outRes
+                          ["stop"] -> stop >>= outRes
+                          [server] -> if server `elem` servers
+                                      then start server >>= outRes
+                                      else throwError "No such vpn server"
+                          _ -> throwError "Bad arguments"
 
 outputResult :: Notify -> Vpn -> VpnToggle ()
-outputResult CLI (On server) = lift (threadDelay 5000000) >> getLocation >>= lift . putStrLn . locationString server . show
-outputResult CLI Off = lift $ putStrLn "Vpn is stopped" -- maybe get location too?
-outputResult Desktop (On server) = lift (threadDelay 5000000) >> getLocation >>= lift . notifyDesktop . locationString server . show
+outputResult CLI (On server) = do
+  lift $ threadDelay 3000000 -- how long to wait?
+  getLocation >>= lift . putStrLn . locationString server . show
+outputResult CLI Off = lift $ putStrLn "Vpn is stopped"
+outputResult Desktop (On server) = do
+  lift $ threadDelay 3000000
+  getLocation >>= lift . notifyDesktop . locationString server . show
 outputResult Desktop Off = lift $ notifyDesktop "Vpn is stopped"
 
 start :: String -> VpnToggle Vpn
@@ -68,7 +74,7 @@ start server = do
       stat <- status server
       case stat of
         Off -> lift $ do
-          void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
+          runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" server
           pure (On server)
@@ -78,8 +84,7 @@ next :: VpnToggle Vpn
 next = do
   current <- currentVpn
   case current of
-    On c -> do void stop
-               nextInList c >>= start
+    On c -> stop >> nextInList c >>= start
     Off -> throwError "Vpn is not running"
 
 stop :: VpnToggle Vpn
@@ -132,4 +137,4 @@ nextInList c = case fmap (\i -> servers !! if i + 1 == length servers then 0 els
   Nothing -> throwError "Error: something unexpected in finding next vpn in the list"
 
 locationString :: String -> String -> String
-locationString server location = "Vpn is started. Server: " <> server <> ". Location: " <> init (tail location)
+locationString server location = "Vpn is started. Server: " <> server <> ". Location: " <> init (tail location) <> "."
