@@ -59,6 +59,7 @@ run [server] = if server `elem` servers
                  else throwError "No such vpn server"
 run _ = throwError "Bad arguments"
 
+-- currentVpn is used in next functions and performs file read and status checking multiple times
 start :: String -> VpnToggle Vpn
 start server = do
   current <- currentVpn
@@ -76,7 +77,7 @@ start server = do
 
 next :: VpnToggle Vpn
 next = do
-  current <- currentVpn -- don't need this, stop will handle it?
+  current <- currentVpn
   case current of
     On c -> do void stop
                nextInList c >>= start
