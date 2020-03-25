@@ -59,7 +59,6 @@ outputResult CLI Off = lift $ putStrLn "Vpn is stopped" -- maybe get location to
 outputResult Desktop (On server) = lift (threadDelay 5000000) >> getLocation >>= lift . notifyDesktop . locationString server . show
 outputResult Desktop Off = lift $ notifyDesktop "Vpn is stopped"
 
--- currentVpn is used in next functions and performs file read and status checking multiple times
 start :: String -> VpnToggle Vpn
 start server = do
   current <- currentVpn
