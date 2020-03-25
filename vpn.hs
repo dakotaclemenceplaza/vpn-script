@@ -14,9 +14,9 @@ import Control.Exception (IOException, catch)
 import Data.List (elemIndex)
 import Control.Monad (void)
 import Network.HTTP.Simple (httpJSON, getResponseBody)
-import Data.Aeson
+import Data.Aeson (Value)
 import qualified Data.Text as T (Text)
-import DBus.Notify 
+import DBus.Notify (summary, body, connectSession, notify, blankNote, Body(Text))
 import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
 import Control.Concurrent (threadDelay)
 import Control.Lens ((^?))
