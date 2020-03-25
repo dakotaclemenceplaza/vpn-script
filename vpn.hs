@@ -18,7 +18,7 @@ import Data.Aeson
 import qualified Data.Text as T (Text)
 import DBus.Notify 
 import Control.Monad.Except (ExceptT, runExceptT, lift, throwError)
---import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay)
 import Control.Lens ((^?))
 import Data.Aeson.Lens (key, _String)
 
@@ -54,9 +54,9 @@ run [server] notifyMode = if server `elem` servers
 run _ _ = throwError "Bad arguments"
 
 outputResult :: Notify -> Vpn -> VpnToggle ()
-outputResult CLI (On server) = getLocation >>= lift . putStrLn . locationString server . show
+outputResult CLI (On server) = lift (threadDelay 5000000) >> getLocation >>= lift . putStrLn . locationString server . show
 outputResult CLI Off = lift $ putStrLn "Vpn is stopped" -- maybe get location too?
-outputResult Desktop (On server) = getLocation >>= lift . notifyDesktop . locationString server . show
+outputResult Desktop (On server) = lift (threadDelay 5000000) >> getLocation >>= lift . notifyDesktop . locationString server . show
 outputResult Desktop Off = lift $ notifyDesktop "Vpn is stopped"
 
 -- currentVpn is used in next functions and performs file read and status checking multiple times
