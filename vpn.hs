@@ -9,7 +9,8 @@
 
 import System.Environment (getArgs)
 import System.Directory (createDirectoryIfMissing, removeFile)
-import System.Process.Typed (runProcess_, readProcess, shell)
+import System.IO (hPutStrLn, stderr)
+import System.Process.Typed (runProcess, runProcess_, readProcess, shell)
 import Control.Exception (IOException, catch)
 import Data.List (elemIndex)
 import Control.Monad (void)
@@ -27,7 +28,9 @@ servers = ["nl1", "nl2", "us1", "us2", "jp1", "jp2", "jp3"]
 defaultServer :: String
 defaultServer = "nl1"
 
-data Vpn = Off | On String
+type Server = String
+data Vpn = Off | On Server
+data Result = V Vpn | Message String
 type VpnToggle a = ExceptT String IO a
 
 data Notify = CLI | Desktop
@@ -41,62 +44,70 @@ main = do
            other -> runExceptT $ run CLI other
   case end of
     Right _ -> pure ()
-    Left e -> putStrLn e -- errors go to stdout only
+    Left e -> hPutStrLn stderr e
     
 run :: Notify -> [String] -> VpnToggle ()
 run notifyMode arg = let outRes = outputResult notifyMode
                      in case arg of
                           [] -> start defaultServer >>= outRes
-                          ["location"] -> currentVpn >>= outRes
+                          ["location"] -> do
+                            vpn <- currentVpn
+                            case vpn of
+                              On server -> outRes (V $ On server)
+                              Off -> outRes (V Off)
                           ["next"] -> next >>= outRes
                           ["stop"] -> stop >>= outRes
                           [server] -> if server `elem` servers
                                       then start server >>= outRes
-                                      else throwError "No such vpn server"
-                          _ -> throwError "Bad arguments"
+                                      else outRes $ Message "No such vpn server"
+                          _ -> outRes $ Message "Unknown arguments"
 
-outputResult :: Notify -> Vpn -> VpnToggle ()
-outputResult CLI (On server) = do
+outputResult :: Notify -> Result -> VpnToggle ()
+outputResult CLI (V (On server)) = do
   lift $ threadDelay 3000000 -- how long to wait?
   getLocation >>= lift . putStrLn . locationString server . show
-outputResult CLI Off = lift $ putStrLn "Vpn is stopped"
-outputResult Desktop (On server) = do
+outputResult Desktop (V (On server)) = do
   lift $ threadDelay 3000000
   getLocation >>= lift . notifyDesktop . locationString server . show
-outputResult Desktop Off = lift $ notifyDesktop "Vpn is stopped"
+outputResult CLI (V Off) = lift $ putStrLn "Vpn is stopped"
+outputResult CLI (Message m) = lift $ putStrLn m
+outputResult Desktop (V Off) = lift $ notifyDesktop "Vpn is stopped"
+outputResult Desktop (Message m) = lift $ notifyDesktop m
 
-start :: String -> VpnToggle Vpn
+start :: String -> VpnToggle Result
 start server = do
   current <- currentVpn
   case current of
-    On c -> throwError $ "Vpn is already running: " <> c
+    On c -> pure $ Message $ "Vpn is already running: " <> c
     Off -> do
       stat <- status server
       case stat of
         Off -> lift $ do
-          runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
+          -- next line returns error exit code but it works fine, so use runProcess and
+          -- throw away exit code instead of runProcess_ which checks it and rethrows
+          void $ runProcess $ shell $ "sudo /etc/init.d/openvpn." <> server <> " start"
           createDirectoryIfMissing False "/tmp/vpn" -- add checking status of just started vpn?
           writeFile "/tmp/vpn/current" server
-          pure (On server)
+          pure $ V $ On server
         On _ -> throwError "Error: running vpn is not in tmp file"
-
-next :: VpnToggle Vpn
+    
+next :: VpnToggle Result
 next = do
   current <- currentVpn
   case current of
     On c -> stop >> nextInList c >>= start
-    Off -> throwError "Vpn is not running"
-
-stop :: VpnToggle Vpn
+    Off -> pure $ Message "Vpn is not running"
+    
+stop :: VpnToggle Result
 stop = do
   current <- currentVpn
   case current of
     On server -> lift $ do
       runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> server <> " stop" 
       removeFile "/tmp/vpn/current" -- add checking status of just stopped?
-      pure Off
-    Off -> throwError "Vpn is not running"
-
+      pure $ V Off
+    Off -> pure $ Message "Vpn is not running"
+    
 currentVpn :: VpnToggle Vpn
 currentVpn = do
   vpnInTmp <- lift $ fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler
