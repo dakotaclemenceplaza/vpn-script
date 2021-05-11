@@ -57,6 +57,7 @@ run notifyMode arg = let outRes = outputResult notifyMode
                               Off -> outRes (V Off)
                           ["next"] -> next >>= outRes
                           ["stop"] -> stop >>= outRes
+                          ["clean"] -> clean >>= outRes
                           [server] -> if server `elem` servers
                                       then start server >>= outRes
                                       else outRes $ Message "No such vpn server"
@@ -107,7 +108,19 @@ stop = do
       removeFile "/tmp/vpn/current" -- add checking status of just stopped?
       pure $ V Off
     Off -> pure $ Message "Vpn is not running"
-    
+
+clean :: VpnToggle Result
+clean = do
+  vpnInTmp <- lift $ fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler
+  case vpnInTmp of
+    On server -> lift $ do
+      runProcess_ $ shell $ "sudo /etc/init.d/openvpn." <> server <> " stop" 
+      removeFile "/tmp/vpn/current"
+      pure $ V Off
+    Off -> pure $ Message "No vpn in current tmp file"
+  where exceptionHandler :: IOException -> IO Vpn
+        exceptionHandler _ = pure Off
+
 currentVpn :: VpnToggle Vpn
 currentVpn = do
   vpnInTmp <- lift $ fmap On (readFile "/tmp/vpn/current") `catch` exceptionHandler
