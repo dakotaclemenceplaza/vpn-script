@@ -1,7 +1,7 @@
 #!/usr/bin/env stack
 {- stack
   script
-  --resolver lts-15.2
+  --resolver lts-17.11
   --package "directory typed-process fdo-notify http-conduit aeson unordered-containers text mtl lens lens-aeson"
 -}
 
